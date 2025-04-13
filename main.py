@@ -10,6 +10,7 @@ If it accomplished this or not, **shrugs**, but certainly don't structure actual
 from enum import Enum, auto
 from functools import partial
 from dataclasses import dataclass, field
+import json
 import math
 from typing import Any, Protocol
 
@@ -17,7 +18,9 @@ import pygame
 
 MAX_STEPS_PER_CAST = 100
 FULL_CIRCLE_DEGREES = 360
-VERY_NEAR_ZERO = 0.0000000000000000000000000000000000000000000000000000000000000000000001
+VERY_NEAR_ZERO = (
+    0.0000000000000000000000000000000000000000000000000000000000000000000001
+)
 
 
 @dataclass
@@ -133,10 +136,12 @@ class Player(DirectionalEntity):
         self.focal_len = self.half_ray_count / math.tan(math.radians(self.half_fov))
 
     def convert_to_projected(self, ray_index):
-        screen_max = self.fov_ray_count - 1 # Avoid "fence post" error
+        screen_max = self.fov_ray_count - 1  # Avoid "fence post" error
 
         # Where does ray index fall on plane ranged from -half_ray_count to +half_ray_count
-        projected_x = (((ray_index * 2) - screen_max) / screen_max) * self.half_ray_count
+        projected_x = (
+            ((ray_index * 2) - screen_max) / screen_max
+        ) * self.half_ray_count
 
         # Get "correct" angle of ray as it would pass through middle of cell in projection plane
         return math.degrees(math.atan2(projected_x, self.focal_len))
@@ -146,7 +151,9 @@ class Player(DirectionalEntity):
         for idx, ray in enumerate(self.rays):
             ray.dir = self.constrain_angle(cur_ang)
             if self.correct_polar_to_cart:
-                ray.dir = self.constrain_angle(self.convert_to_projected(idx) + self.dir)
+                ray.dir = self.constrain_angle(
+                    self.convert_to_projected(idx) + self.dir
+                )
             ray.pos = self.pos
             cur_ang += self.ang_step
 
@@ -157,10 +164,12 @@ class Player(DirectionalEntity):
             if event.type_ == GameEventType.TOGGLE_POLAR_TO_CARTESIAN_CORRECTION:
                 self.correct_polar_to_cart = not self.correct_polar_to_cart
 
+
 @dataclass
 class CellMeta:
     solid: bool = True
     color: str = "orange"
+
 
 @dataclass
 class MapData:
@@ -321,7 +330,9 @@ class Map:
             # Vert intersect x component
             # The players direction in respect to the gird changes if addition or
             # subtraction is needed to calculate intersect position
-            if (angle >= 0 and angle <= 90) or (angle >= 270 and angle <= FULL_CIRCLE_DEGREES):
+            if (angle >= 0 and angle <= 90) or (
+                angle >= 270 and angle <= FULL_CIRCLE_DEGREES
+            ):
                 step_x = self.grid_step - (next_cast_origin.x - cell_origin.x)
                 vert_intersect_x_comp = next_cast_origin.x + step_x
                 next_cell_x = cell_origin.x + self.grid_step + self.intersect_padding
@@ -363,7 +374,9 @@ class Map:
             # adj = opposite / tan(angle)
             # delta_x = adj
             delta_x = abs(step_y / math.tan(math.radians(angle)))
-            if (angle >= 0 and angle <= 90) or (angle >= 270 and angle <= FULL_CIRCLE_DEGREES):
+            if (angle >= 0 and angle <= 90) or (
+                angle >= 270 and angle <= FULL_CIRCLE_DEGREES
+            ):
                 horiz_intersect_x_comp = next_cast_origin.x + delta_x
             else:
                 horiz_intersect_x_comp = next_cast_origin.x - delta_x
@@ -488,6 +501,14 @@ class MapLoader:
 
         return Map(MapData(data, cls.DEFAULT_LEVEL_CELL_METAS))
 
+    @classmethod
+    def from_file(cls, file_name: str) -> Map:
+        with open(file_name, "r") as f:
+            serialized_data = f.read()
+
+        map_data = json.loads(serialized_data)
+
+        return Map(MapData(map_data, cls.DEFAULT_LEVEL_CELL_METAS))
 
 
 class View(Protocol):
@@ -515,13 +536,17 @@ class FPSView:
         self, ray_index: int, ray_count: int, height_scalar: float, color: pygame.Color
     ):
         x_surface = self.surface.get_width() * (ray_index / ray_count)
-        height_surface = (self.surface.get_height() / self.map.cell_count) / height_scalar
+        height_surface = (
+            self.surface.get_height() / self.map.cell_count
+        ) / height_scalar
         width_surface = self.surface.get_width() / ray_count
         y_surface = (self.surface.get_height() - height_surface) / 2
-        distance_squared_light_loss = height_scalar ** 2 * self.light_loss_multiplier
+        distance_squared_light_loss = height_scalar**2 * self.light_loss_multiplier
         pygame.draw.rect(
             self.surface,
-            color.lerp(0, min(self.max_brightness_decrese, distance_squared_light_loss)),
+            color.lerp(
+                0, min(self.max_brightness_decrese, distance_squared_light_loss)
+            ),
             pygame.Rect(
                 (x_surface, y_surface),
                 (width_surface, height_surface),
@@ -880,17 +905,25 @@ class Game:
             view.render()
             self.main_view.blit(view.surface, view.pos)
 
+
 TOP_DOWN_VIEW_SIZE = 800
 FPS_VIEW_SIZE = 640
 MARGIN = 10
 RESOLUTION = 1
 
+
 def main():
     # pygame setup
     pygame.init()
-    screen = pygame.display.set_mode((TOP_DOWN_VIEW_SIZE + FPS_VIEW_SIZE + MARGIN, max(TOP_DOWN_VIEW_SIZE, FPS_VIEW_SIZE)))
+    screen = pygame.display.set_mode(
+        (
+            TOP_DOWN_VIEW_SIZE + FPS_VIEW_SIZE + MARGIN,
+            max(TOP_DOWN_VIEW_SIZE, FPS_VIEW_SIZE),
+        )
+    )
     clock = pygame.time.Clock()
-    map = MapLoader.generate_test_level(25)
+    # map = MapLoader.generate_test_level(25)
+    map = MapLoader.from_file("level_1.json")
     player_size_from_cell_size = map.grid_step / 8
     speed = player_size_from_cell_size / 5
     ray_cast_depth = map.grid_step * 8
@@ -905,10 +938,18 @@ def main():
         radius=player_size_from_cell_size,
     )
     top_down_view = TopDownDebugView(
-        pygame.Vector2(0, 0), pygame.Surface((TOP_DOWN_VIEW_SIZE, TOP_DOWN_VIEW_SIZE)), map, player
+        pygame.Vector2(0, 0),
+        pygame.Surface((TOP_DOWN_VIEW_SIZE, TOP_DOWN_VIEW_SIZE)),
+        map,
+        player,
     )
 
-    fps_view = FPSView(pygame.Vector2(TOP_DOWN_VIEW_SIZE + MARGIN, 0), pygame.Surface((FPS_VIEW_SIZE, FPS_VIEW_SIZE)), map, player)
+    fps_view = FPSView(
+        pygame.Vector2(TOP_DOWN_VIEW_SIZE + MARGIN, 0),
+        pygame.Surface((FPS_VIEW_SIZE, FPS_VIEW_SIZE)),
+        map,
+        player,
+    )
 
     game = Game(player, map, screen, [top_down_view, fps_view])
     while not game.is_quitting:
