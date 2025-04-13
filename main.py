@@ -17,7 +17,7 @@ import pygame
 
 MAX_STEPS_PER_CAST = 100
 FULL_CIRCLE_DEGREES = 360
-VERY_NEAR_ZERO = 0.000000000000000000000000000001
+VERY_NEAR_ZERO = 0.0000000000000000000000000000000000000000000000000000000000000000000001
 
 
 @dataclass
@@ -44,6 +44,17 @@ class Intersect:
 class BoundBox:
     top_left: pygame.Vector2
     bottom_rigth: pygame.Vector2
+
+
+class GameEventType(Enum):
+    TOGGLE_DISTANCE_CORRECTION = auto()
+    TOGGLE_POLAR_TO_CARTESIAN_CORRECTION = auto()
+
+
+@dataclass
+class GameEvent:
+    type_: GameEventType
+    meta: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -106,9 +117,11 @@ class Player(DirectionalEntity):
     fov: int = 60
     fov_ray_count: int = 320
     half_fov: float = 0
+    half_ray_count: float = 0
     ang_step: float = 0
     rays: list[Ray] = field(default_factory=list)
-    focal_len: float = 0.25
+    focal_len: float = 0.0
+    correct_polar_to_cart: bool = True
 
     def __post_init__(self):
         self.half_fov = self.fov / 2
@@ -116,39 +129,38 @@ class Player(DirectionalEntity):
         for _ in range(self.fov_ray_count):
             self.rays.append(Ray(self.pos, self.ray_cast_depth, self.dir))
 
-    def calc_half_projection_len(self):
-        # x = opposite
-        # focal_len = adj
-        # tan(fov/2) = x / focal_len
-        # x = tan(fov/2) * focal_len
-        return math.tan(math.radians(self.fov / 2)) * self.focal_len
+        self.half_ray_count = self.fov_ray_count / 2
+        self.focal_len = self.half_ray_count / math.tan(math.radians(self.half_fov))
 
     def convert_to_projected(self, ray_index):
-        # ray_index / ray_count = x / 2 * half_poj_len
-        # x = (2 * half_poj_len * ray_index) / ray_count
-        # x = opposite, focal_len = adj
-        # projected_angle = arctan(x/focal_len)
-        half_poj_len = self.calc_half_projection_len()
-        projected_x = 2 * half_poj_len * ray_index
-        return math.degrees(math.atan(projected_x / self.fov_ray_count))
+        screen_max = self.fov_ray_count - 1 # Avoid "fence post" error
 
-    def fov_rays(self, correct_for_projection: bool = False) -> list[Ray]:
+        # Where does ray index fall on plane ranged from -half_ray_count to +half_ray_count
+        projected_x = (((ray_index * 2) - screen_max) / screen_max) * self.half_ray_count
+
+        # Get "correct" angle of ray as it would pass through middle of cell in projection plane
+        return math.degrees(math.atan2(projected_x, self.focal_len))
+
+    def fov_rays(self) -> list[Ray]:
         cur_ang = self.dir - self.half_fov
         for idx, ray in enumerate(self.rays):
             ray.dir = self.constrain_angle(cur_ang)
-            if correct_for_projection:
-                ray.dir = self.convert_to_projected(idx)
+            if self.correct_polar_to_cart:
+                ray.dir = self.constrain_angle(self.convert_to_projected(idx) + self.dir)
             ray.pos = self.pos
             cur_ang += self.ang_step
 
         return self.rays
 
+    def handle_events(self, events: list[GameEvent]):
+        for event in events:
+            if event.type_ == GameEventType.TOGGLE_POLAR_TO_CARTESIAN_CORRECTION:
+                self.correct_polar_to_cart = not self.correct_polar_to_cart
 
 @dataclass
 class CellMeta:
     solid: bool = True
     color: str = "orange"
-
 
 @dataclass
 class MapData:
@@ -309,7 +321,7 @@ class Map:
             # Vert intersect x component
             # The players direction in respect to the gird changes if addition or
             # subtraction is needed to calculate intersect position
-            if (angle >= 0 and angle <= 90) or (angle >= 270 and angle <= 360):
+            if (angle >= 0 and angle <= 90) or (angle >= 270 and angle <= FULL_CIRCLE_DEGREES):
                 step_x = self.grid_step - (next_cast_origin.x - cell_origin.x)
                 vert_intersect_x_comp = next_cast_origin.x + step_x
                 next_cell_x = cell_origin.x + self.grid_step + self.intersect_padding
@@ -351,7 +363,7 @@ class Map:
             # adj = opposite / tan(angle)
             # delta_x = adj
             delta_x = abs(step_y / math.tan(math.radians(angle)))
-            if (angle >= 0 and angle <= 90) or (angle >= 270 and angle <= 360):
+            if (angle >= 0 and angle <= 90) or (angle >= 270 and angle <= FULL_CIRCLE_DEGREES):
                 horiz_intersect_x_comp = next_cast_origin.x + delta_x
             else:
                 horiz_intersect_x_comp = next_cast_origin.x - delta_x
@@ -390,6 +402,9 @@ class Map:
             # "fancier" ray-casters
             traversed_cast_distance += math.sqrt(intersect_distance_squared)
 
+            # TODO: Remove distance correctness verification
+            # inter_d = math.sqrt((ray.pos.x - closest_intersect.x) ** 2 + (ray.pos.y - closest_intersect.y) ** 2)
+
             marked = False
             # Stop traversing down the ray once its length has exceeded the viewing distance
             # that has been defined for the player/ entity "casting the rays"
@@ -417,7 +432,7 @@ class Map:
                 has_collided = self.map_data.is_solid_cell(cell)
                 color = self.map_data.get_color(cell)
 
-                if not has_collided:
+                if has_collided:
                     marked = True
 
                 intersects.append(
@@ -443,7 +458,7 @@ class Map:
 
 class MapLoader:
     DEFAULT_LEVEL = [
-        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 2, 0],
         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
         [0, 0, 1, 1, 1, 1, 1, 1, 0, 0],
         [0, 0, 1, 0, 0, 0, 0, 0, 0, 0],
@@ -474,15 +489,6 @@ class MapLoader:
         return Map(MapData(data, cls.DEFAULT_LEVEL_CELL_METAS))
 
 
-class GameEventType(Enum):
-    TOGGLE_DISTANCE_CORRECTION = auto()
-
-
-@dataclass
-class GameEvent:
-    type_: GameEventType
-    meta: dict[str, Any] = field(default_factory=dict)
-
 
 class View(Protocol):
     pos: pygame.Vector2
@@ -502,24 +508,27 @@ class FPSView:
     map: Map
     player: Player
     true_distance = False
+    max_brightness_decrese: float = 0.85
+    light_loss_multiplier: float = 4
 
     def draw_col(
         self, ray_index: int, ray_count: int, height_scalar: float, color: pygame.Color
     ):
         x_surface = self.surface.get_width() * (ray_index / ray_count)
-        height_surface = self.surface.get_height() * height_scalar
+        height_surface = (self.surface.get_height() / self.map.cell_count) / height_scalar
         width_surface = self.surface.get_width() / ray_count
         y_surface = (self.surface.get_height() - height_surface) / 2
+        distance_squared_light_loss = height_scalar ** 2 * self.light_loss_multiplier
         pygame.draw.rect(
             self.surface,
-            color,
+            color.lerp(0, min(self.max_brightness_decrese, distance_squared_light_loss)),
             pygame.Rect(
                 (x_surface, y_surface),
                 (width_surface, height_surface),
             ),
         )
 
-    def draw_collision_bound(self, rays=None, intersects_per_ray=None):
+    def draw_collision_bound(self, rays=None):
         rays = self.player.fov_rays()
         ray_count = len(rays)
         for ray_idx, player_ray in enumerate(rays):
@@ -531,9 +540,8 @@ class FPSView:
                     else:
                         distance = intersect.cos_distance
 
-                    height_scalar = 1 - (distance / self.player.ray_cast_depth.x)
                     self.draw_col(
-                        (ray_count - ray_idx), ray_count, height_scalar, intersect.color
+                        (ray_count - ray_idx), ray_count, distance, intersect.color
                     )
                     break
 
@@ -626,18 +634,6 @@ class TopDownDebugView:
                 self.map_cell(self.map.get_cell(intersect.origin)),
                 math.ceil(self.map_scalar(0.008).x),
             )
-
-            # Draw target relative x component
-            # pygame.draw.line(self.surface, 0,
-            #     self.map_point(pygame.Vector2(cell_origin.x, object_origin.y)),
-            #     self.map_point(object_origin)
-            # )
-
-            # Draw target relative y component
-            # pygame.draw.line(self.surface, 0,
-            #     self.map_point(pygame.Vector2(object_origin.x, cell_origin.y)),
-            #     self.map_point(object_origin)
-            # )
 
             self.draw_ray(ray, color)
 
@@ -782,9 +778,9 @@ class TopDownDebugView:
         self.clear()
         self.draw_grid()
         self.draw_cells()
-        self.draw_single_ray_cast()
-        self.draw_collision_bound()
+        # self.draw_single_ray_cast()
         # self.draw_ray_cast_fov(marked_only=True)
+        self.draw_collision_bound()
         self.draw_player()
         self.draw_next_step()
 
@@ -813,6 +809,7 @@ class Game:
         self.key_map = {
             pygame.K_q: self.action_quit,
             pygame.K_6: self.action_toggle_distance_correction,
+            pygame.K_7: self.action_toggle_porlar_to_cartesian_correction,
         }
 
         self.key_map_repeat = {
@@ -828,6 +825,11 @@ class Game:
     def action_toggle_distance_correction(self):
         self.game_events_for_tick.append(
             GameEvent(GameEventType.TOGGLE_DISTANCE_CORRECTION)
+        )
+
+    def action_toggle_porlar_to_cartesian_correction(self):
+        self.game_events_for_tick.append(
+            GameEvent(GameEventType.TOGGLE_POLAR_TO_CARTESIAN_CORRECTION)
         )
 
     def action_player_move(self, forward=True):
@@ -869,6 +871,8 @@ class Game:
         for view in self.views:
             view.handle_events(self.game_events_for_tick)
 
+        self.focused_player.handle_events(self.game_events_for_tick)
+
         self.util_clear_events()
 
     def render(self):
@@ -876,11 +880,15 @@ class Game:
             view.render()
             self.main_view.blit(view.surface, view.pos)
 
+TOP_DOWN_VIEW_SIZE = 800
+FPS_VIEW_SIZE = 640
+MARGIN = 10
+RESOLUTION = 1
 
 def main():
     # pygame setup
     pygame.init()
-    screen = pygame.display.set_mode((1450, 1024))
+    screen = pygame.display.set_mode((TOP_DOWN_VIEW_SIZE + FPS_VIEW_SIZE + MARGIN, max(TOP_DOWN_VIEW_SIZE, FPS_VIEW_SIZE)))
     clock = pygame.time.Clock()
     map = MapLoader.generate_test_level(25)
     player_size_from_cell_size = map.grid_step / 8
@@ -892,17 +900,19 @@ def main():
         dir=145,
         speed=pygame.Vector2(speed, 0),
         rotation_speed=2,
-        fov_ray_count=320,
+        fov=90,
+        fov_ray_count=math.ceil(FPS_VIEW_SIZE * min(1, RESOLUTION)),
         radius=player_size_from_cell_size,
     )
     top_down_view = TopDownDebugView(
-        pygame.Vector2(0, 0), pygame.Surface((800, 800)), map, player
+        pygame.Vector2(0, 0), pygame.Surface((TOP_DOWN_VIEW_SIZE, TOP_DOWN_VIEW_SIZE)), map, player
     )
 
-    fps_view = FPSView(pygame.Vector2(810, 0), pygame.Surface((640, 400)), map, player)
+    fps_view = FPSView(pygame.Vector2(TOP_DOWN_VIEW_SIZE + MARGIN, 0), pygame.Surface((FPS_VIEW_SIZE, FPS_VIEW_SIZE)), map, player)
 
     game = Game(player, map, screen, [top_down_view, fps_view])
     while not game.is_quitting:
+        # TODO: Move remaining input in to Game
         keys = pygame.key.get_pressed()
         if keys[pygame.K_0]:
             player.dir = 0
@@ -917,51 +927,10 @@ def main():
             player.dir = 270
 
         if keys[pygame.K_4]:
-            player.dir = 360
+            player.dir = FULL_CIRCLE_DEGREES
 
         if keys[pygame.K_5]:
             player.dir = VERY_NEAR_ZERO
-
-        # if keys[pygame.K_6]:
-        #     fps_view.true_distance = not fps_view.true_distance
-
-        if keys[pygame.K_7]:
-            player.fov_ray_count = 10
-
-        if keys[pygame.K_8]:
-            player.fov_ray_count = 1
-
-        if keys[pygame.K_9]:
-            player.fov_ray_count = 320
-
-        # if keys[pygame.K_w]:
-        #     player.calc_next_pos()
-        #     next_bound_box = player.get_bound_box(next_pos=True)
-        #     if not map.will_collide(next_bound_box):
-        #         player.update_pos()
-        #
-        # if keys[pygame.K_s]:
-        #     player.calc_next_pos(forward=False)
-        #     player.update_pos()
-        #
-        # if keys[pygame.K_d]:
-        #     player.update_dir()
-        #
-        # if keys[pygame.K_a]:
-        #     player.update_dir(clock_wise=False)
-
-        # if keys[pygame.K_q]:
-        #     running = False
-
-        # if count > 14:
-        #     count = 0
-        #     if update:
-        #         angle += 1
-        # else:
-        #     count += 1
-        #
-        # if angle > 360:
-        #     angle = 1
 
         game.handle_repeat_input(keys)
 
@@ -977,10 +946,6 @@ def main():
         screen.fill("green")
 
         # RENDER YOUR GAME HERE
-        # top_down_view.render()
-        # screen.blit(top_down_view.surface, top_down_view.pos)
-        # fps_view.render()
-        # screen.blit(fps_view.surface, fps_view.pos)
         game.dispatch_events()
         game.render()
 
