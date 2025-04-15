@@ -41,6 +41,8 @@ class Intersect:
     collision: bool
     color: pygame.Color
     marked: bool
+    intersect_type: str
+    wall_texture: pygame.Surface | None
 
 
 @dataclass
@@ -52,6 +54,7 @@ class BoundBox:
 class GameEventType(Enum):
     TOGGLE_DISTANCE_CORRECTION = auto()
     TOGGLE_POLAR_TO_CARTESIAN_CORRECTION = auto()
+    TOGGLE_TEXTURE_TYPE = auto()
 
 
 @dataclass
@@ -169,6 +172,7 @@ class Player(DirectionalEntity):
 class CellMeta:
     solid: bool = True
     color: str = "orange"
+    wall_texture: pygame.Surface | None = None
 
 
 @dataclass
@@ -177,16 +181,26 @@ class MapData:
     cell_metas: dict[int, CellMeta]
     default_color: pygame.Color = field(default_factory=partial(pygame.Color, "black"))
 
-    def get_color(self, cell_cord: pygame.Vector2) -> pygame.Color:
+    def get_cell_meta(self, cell_cord: pygame.Vector2) -> CellMeta | None:
         cell_y = int(cell_cord.y)
         cell_x = int(cell_cord.x)
 
         if (cell_y < 0 or cell_y >= len(self.cell_data)) or (
             cell_x < 0 or cell_x >= len(self.cell_data[cell_y])
         ):
+            return None
+
+        return self.cell_metas[self.cell_data[cell_y][cell_x]]
+
+    def get_color(self, cell_cord: pygame.Vector2) -> pygame.Color:
+        if not (cell_meta := self.get_cell_meta(cell_cord)):
             return self.default_color
 
-        return pygame.Color(self.cell_metas[self.cell_data[cell_y][cell_x]].color)
+        return pygame.Color(cell_meta.color)
+
+    def get_wall_texture(self, cell_cord: pygame.Vector2) -> pygame.Surface | None:
+        cell_meta = self.get_cell_meta(cell_cord)
+        return cell_meta.wall_texture if cell_meta else None
 
     def is_solid_cell(self, cell_cord: pygame.Vector2) -> bool:
         cell_y = int(cell_cord.y)
@@ -203,6 +217,7 @@ class MapData:
 @dataclass
 class Map:
     map_data: MapData
+    sample_wall_texture: pygame.Surface | None
     cell_count: int = 0
     intersect_padding = 0.001
 
@@ -403,9 +418,11 @@ class Map:
             if horiz_intersect_dist_squared < vertical_intersect_dist_squared:
                 closest_intersect = pygame.Vector2(horiz_intersect.x, next_cell_y)
                 intersect_distance_squared = horiz_intersect_dist_squared
+                intersect_type = "x"
             else:
                 closest_intersect = pygame.Vector2(next_cell_x, vert_intersect.y)
                 intersect_distance_squared = vertical_intersect_dist_squared
+                intersect_type = "y"
 
             # Capturing all intersects along the ray so that we can visualize them later
             # however it we could optimize and only capture the first intersect, only having to take
@@ -444,6 +461,7 @@ class Map:
                 cell = self.get_cell(closest_intersect)
                 has_collided = self.map_data.is_solid_cell(cell)
                 color = self.map_data.get_color(cell)
+                wall_texture = self.map_data.get_wall_texture(cell)
 
                 if has_collided:
                     marked = True
@@ -459,6 +477,8 @@ class Map:
                         has_collided,
                         color,
                         marked,
+                        intersect_type,
+                        wall_texture,
                     )
                 )
             else:
@@ -499,16 +519,31 @@ class MapLoader:
 
         data.extend([[0] * size_in_cells] * (size_in_cells - len(cls.DEFAULT_LEVEL)))
 
-        return Map(MapData(data, cls.DEFAULT_LEVEL_CELL_METAS))
+        return Map(MapData(data, cls.DEFAULT_LEVEL_CELL_METAS), None)
 
     @classmethod
     def from_file(cls, file_name: str) -> Map:
         with open(file_name, "r") as f:
             serialized_data = f.read()
 
-        map_data = json.loads(serialized_data)
+        level_data = json.loads(serialized_data)
+        cell_meta = {}
+        sample_wall_texture = None
+        for k, v in level_data.get("cell_meta", {}).items():
+            wall_texture_path = v.pop("wall_texture", None)
+            wall_texture = (
+                pygame.image.load(wall_texture_path) if wall_texture_path else None
+            )
+            if wall_texture:
+                sample_wall_texture = wall_texture
+            cell_meta[int(k)] = CellMeta(**v, wall_texture=wall_texture)
 
-        return Map(MapData(map_data, cls.DEFAULT_LEVEL_CELL_METAS))
+        return Map(
+            MapData(
+                level_data.get("layout"), (cell_meta or cls.DEFAULT_LEVEL_CELL_METAS)
+            ),
+            sample_wall_texture,
+        )
 
 
 class View(Protocol):
@@ -522,6 +557,36 @@ class View(Protocol):
     def handle_events(self, events: list[GameEvent]): ...
 
 
+TEST_TEXTURE = [
+    0,
+    255,
+    0,
+    255,
+    0,
+    255,
+    0,
+    255,
+    0,
+    255,
+    0,
+    255,
+    0,
+    255,
+    0,
+    255,
+    0,
+    255,
+    0,
+    255,
+]
+
+
+class WallShadingType(Enum):
+    TEST = auto()
+    SOLID = auto()
+    TEXTURE = auto()
+
+
 @dataclass
 class FPSView:
     pos: pygame.Vector2
@@ -530,32 +595,96 @@ class FPSView:
     player: Player
     true_distance = False
     max_brightness_decrese: float = 0.85
-    light_loss_multiplier: float = 4
+    light_loss_multiplier: float = 10
+    col_max_scale_h: int = 10000
+    wall_shading: WallShadingType = WallShadingType.TEXTURE
+    test_texture: list[int] = field(default_factory=partial(list, TEST_TEXTURE))
+
+    def __post_init__(self):
+        self.wall_height = self.surface.get_height() / self.map.cell_count
+        self.surface_col_width = int(
+            math.ceil(self.surface.get_width() / self.player.fov_ray_count)
+        )
+        self.sample_wall_texture = self.map.sample_wall_texture or pygame.Surface(
+            (0, 0)
+        )
+        self.wall_tex_size = pygame.Vector2(
+            self.sample_wall_texture.get_width(), self.sample_wall_texture.get_height()
+        )
+        self.texture_rect = pygame.Rect((0, 0), (0, 0))
+        self.col_surface = pygame.Surface(
+            (self.surface_col_width, self.col_max_scale_h)
+        ).convert(self.sample_wall_texture)
+        self.dark = pygame.Surface(
+            (self.surface_col_width, self.col_max_scale_h), flags=pygame.SRCALPHA
+        )
+        self.dark.fill((1, 1, 1))
 
     def draw_col(
-        self, ray_index: int, ray_count: int, height_scalar: float, color: pygame.Color
+        self,
+        wall_tex_scalar: float,
+        width_scalar: float,
+        height_scalar: float,
+        color: pygame.Color,
+        wall_texture: pygame.Surface | None = None,
     ):
-        x_surface = self.surface.get_width() * (ray_index / ray_count)
-        height_surface = (
-            self.surface.get_height() / self.map.cell_count
-        ) / height_scalar
-        width_surface = self.surface.get_width() / ray_count
+        x_surface = self.surface.get_width() * width_scalar
+        height_surface = min(self.wall_height / height_scalar, self.col_max_scale_h)
         y_surface = (self.surface.get_height() - height_surface) / 2
         distance_squared_light_loss = height_scalar**2 * self.light_loss_multiplier
-        pygame.draw.rect(
-            self.surface,
-            color.lerp(
-                0, min(self.max_brightness_decrese, distance_squared_light_loss)
-            ),
-            pygame.Rect(
-                (x_surface, y_surface),
-                (width_surface, height_surface),
-            ),
-        )
+        if self.wall_shading == WallShadingType.TEXTURE and wall_texture:
+            # TODO: Wall texture direction needs to be based on player direction
+            texture_w = self.wall_tex_size.x - 1
+            tex_x = math.ceil(texture_w * wall_tex_scalar)
+            texture_rect = pygame.Rect(
+                (tex_x, 0),
+                (1, self.wall_tex_size.y),
+            )
+            self.texture_rect.x = tex_x
+            self.texture_rect.y = 0
+            self.texture_rect.width = 1
+            self.texture_rect.height = int(self.wall_tex_size.y)
+
+            col_texture = self.col_surface.subsurface(
+                (0, 0), (self.surface_col_width, height_surface)
+            )
+            capped_light_loss = int(
+                255 * min(self.max_brightness_decrese, distance_squared_light_loss)
+            )
+            self.dark.set_alpha(capped_light_loss, pygame.RLEACCEL)
+            wall_col_tex_source = wall_texture.subsurface(texture_rect)
+            pygame.transform.scale(
+                wall_col_tex_source,
+                (self.surface_col_width, height_surface),
+                col_texture,
+            )
+            self.surface.blit(col_texture, (x_surface, y_surface))
+            self.surface.blit(self.dark, (x_surface, y_surface))
+        else:
+            if self.wall_shading == WallShadingType.TEST:
+                tex_x = math.ceil((len(self.test_texture) - 1) * wall_tex_scalar)
+                color = pygame.Color(
+                    self.test_texture[tex_x],
+                    self.test_texture[tex_x],
+                    self.test_texture[tex_x],
+                )
+
+            self.texture_rect.x = int(x_surface)
+            self.texture_rect.y = int(y_surface)
+            self.texture_rect.width = int(self.surface_col_width)
+            self.texture_rect.height = int(height_surface)
+
+            pygame.draw.rect(
+                self.surface,
+                color.lerp(
+                    0, min(self.max_brightness_decrese, distance_squared_light_loss)
+                ),
+                self.texture_rect,
+            )
 
     def draw_collision_bound(self, rays=None):
         rays = self.player.fov_rays()
-        ray_count = len(rays)
+        ray_count = self.player.fov_ray_count
         for ray_idx, player_ray in enumerate(rays):
             intersects = self.map.intersect(player_ray, self.player.dir)
             for intersect in intersects:
@@ -564,9 +693,18 @@ class FPSView:
                         distance = intersect.distance
                     else:
                         distance = intersect.cos_distance
+                    width_scalar = (ray_count - ray_idx) / ray_count
+                    wall_tex_scalar = (
+                        getattr(intersect.intersect, intersect.intersect_type)
+                        % self.map.grid_step
+                    ) / self.map.grid_step
 
                     self.draw_col(
-                        (ray_count - ray_idx), ray_count, distance, intersect.color
+                        wall_tex_scalar,
+                        width_scalar,
+                        distance,
+                        intersect.color,
+                        intersect.wall_texture,
                     )
                     break
 
@@ -581,6 +719,10 @@ class FPSView:
         for event in events:
             if event.type_ == GameEventType.TOGGLE_DISTANCE_CORRECTION:
                 self.true_distance = not self.true_distance
+            elif event.type_ == GameEventType.TOGGLE_TEXTURE_TYPE:
+                self.wall_shading = WallShadingType(
+                    (self.wall_shading.value + 1) % (len(WallShadingType)) + 1
+                )
 
 
 @dataclass
@@ -835,6 +977,7 @@ class Game:
             pygame.K_q: self.action_quit,
             pygame.K_6: self.action_toggle_distance_correction,
             pygame.K_7: self.action_toggle_porlar_to_cartesian_correction,
+            pygame.K_8: self.action_toggle_wall_texture_type,
         }
 
         self.key_map_repeat = {
@@ -851,6 +994,9 @@ class Game:
         self.game_events_for_tick.append(
             GameEvent(GameEventType.TOGGLE_DISTANCE_CORRECTION)
         )
+
+    def action_toggle_wall_texture_type(self):
+        self.game_events_for_tick.append(GameEvent(GameEventType.TOGGLE_TEXTURE_TYPE))
 
     def action_toggle_porlar_to_cartesian_correction(self):
         self.game_events_for_tick.append(
@@ -924,6 +1070,7 @@ def main():
     clock = pygame.time.Clock()
     # map = MapLoader.generate_test_level(25)
     map = MapLoader.from_file("level_1.json")
+    # map = MapLoader.from_file("level_2.json")
     player_size_from_cell_size = map.grid_step / 8
     speed = player_size_from_cell_size / 5
     ray_cast_depth = map.grid_step * 8
