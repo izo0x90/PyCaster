@@ -5,6 +5,7 @@ import pygame
 
 from raycast import Player, VERY_NEAR_ZERO
 
+
 @dataclass
 class Mode7SubView:
     surface: pygame.Surface
@@ -15,7 +16,9 @@ class Mode7SubView:
         self.floor_tex = pygame.image.load(self.tex_name)
         diagonal = math.sqrt((self.floor_tex.get_width() ** 2) * 2)
         self.big_tex = pygame.Surface((diagonal, diagonal)).convert(self.floor_tex)
-        self.top_down_surface = pygame.Surface((diagonal, diagonal)).convert(self.floor_tex)
+        self.top_down_surface = pygame.Surface((diagonal, diagonal)).convert(
+            self.floor_tex
+        )
         self.last_sample_angle = float("inf")
 
     def map_point(self, cord: pygame.Vector2, tex):
@@ -51,7 +54,12 @@ class Mode7SubView:
 
         player_pos, player_pos_tex = self.orient_player_top_down_dir()
 
-        pygame.draw.circle(self.top_down_surface, "yellow", self.map_point(pygame.Vector2(0,0), self.top_down_surface), 20)
+        pygame.draw.circle(
+            self.top_down_surface,
+            "yellow",
+            self.map_point(pygame.Vector2(0, 0), self.top_down_surface),
+            20,
+        )
         pygame.draw.circle(self.top_down_surface, "purple", player_pos_tex, 20)
 
         half_screen_height = math.floor(self.surface.get_height() / 2)
@@ -68,8 +76,12 @@ class Mode7SubView:
             start_sample.rotate_ip(sample_angle_start)
             start_sample += player_pos
             start_sample_tex = self.map_point(start_sample, sample_tex)
-            start_sample_tex.x = max(0, min(start_sample_tex.x, sample_tex.get_width() - 1))
-            start_sample_tex.y = max(0, min(start_sample_tex.y, sample_tex.get_width() - 1))
+            start_sample_tex.x = max(
+                0, min(start_sample_tex.x, sample_tex.get_width() - 1)
+            )
+            start_sample_tex.y = max(
+                0, min(start_sample_tex.y, sample_tex.get_width() - 1)
+            )
             pygame.draw.circle(sample_tex, "blue", start_sample_tex, 50)
 
             end_sample = pygame.Vector2(distance, 0)
@@ -77,14 +89,18 @@ class Mode7SubView:
             end_sample += player_pos
             end_sample_tex = self.map_point(end_sample, sample_tex)
             end_sample_tex.x = max(0, min(end_sample_tex.x, sample_tex.get_width() - 1))
-            end_sample_tex.y = max(0, min(end_sample_tex.y, sample_tex.get_height() - 1))
+            end_sample_tex.y = max(
+                0, min(end_sample_tex.y, sample_tex.get_height() - 1)
+            )
             pygame.draw.circle(sample_tex, "red", end_sample_tex, 50)
 
             row_width = end_sample_tex - start_sample_tex
             row_width.x = min(row_width.x, sample_tex.get_width() - 1)
             row_width.y = 1
 
-        self.surface.blit(pygame.transform.scale(self.top_down_surface, (640, 640)), (0, 0))
+        self.surface.blit(
+            pygame.transform.scale(self.top_down_surface, (640, 640)), (0, 0)
+        )
 
     def draw_floor_fps(self):
         half_screen_height = math.floor(self.surface.get_height() / 2)
@@ -105,23 +121,29 @@ class Mode7SubView:
             start_sample.rotate_ip(sample_angle_start)
             start_sample += player_pos
             start_sample_tex = self.map_point(start_sample, sample_tex)
-            start_sample_tex.x = max(0, min(start_sample_tex.x, sample_tex.get_width() - 1))
-            start_sample_tex.y = max(0, min(start_sample_tex.y, sample_tex.get_width() - 1))
+            start_sample_tex.x = max(
+                0, min(start_sample_tex.x, sample_tex.get_width() - 1)
+            )
+            start_sample_tex.y = max(
+                0, min(start_sample_tex.y, sample_tex.get_width() - 1)
+            )
 
             end_sample = pygame.Vector2(distance, 0)
             end_sample.rotate_ip(sample_angle_end)
             end_sample += player_pos
             end_sample_tex = self.map_point(end_sample, sample_tex)
             end_sample_tex.x = max(0, min(end_sample_tex.x, sample_tex.get_width() - 1))
-            end_sample_tex.y = max(0, min(end_sample_tex.y, sample_tex.get_height() - 1))
+            end_sample_tex.y = max(
+                0, min(end_sample_tex.y, sample_tex.get_height() - 1)
+            )
 
             row_width = end_sample_tex - start_sample_tex
             row_width.x = min(row_width.x, sample_tex.get_width() - 1)
             row_width.y = 1
 
-            pygame.draw.line(self.surface, "red", (0, row), (self.surface.get_width(), row))
+            pygame.draw.line(
+                self.surface, "red", (0, row), (self.surface.get_width(), row)
+            )
             row_tex = sample_tex.subsurface(start_sample_tex, row_width)
             scaled_row = pygame.transform.scale(row_tex, (self.surface.get_width(), 1))
             self.surface.blit(scaled_row, (0, row))
-
-

@@ -5,7 +5,7 @@ import math
 
 import pygame
 
-from events import GameEvent, GameEventType
+from events import GameEventType, GameEventList
 
 MAX_STEPS_PER_CAST = 100
 FULL_CIRCLE_DEGREES = 360
@@ -54,7 +54,7 @@ class DirectionalEntity:
 
     def __post_init__(self):
         self.entity_ray = Ray(self.pos, self.ray_cast_depth, self.dir)
-        self.entity_speed_ray =  Ray(self.pos, self.speed, self.dir)
+        self.entity_speed_ray = Ray(self.pos, self.speed, self.dir)
         self.bound_box = BoundBox(
             pygame.Vector2(self.pos.x - self.radius, self.pos.y + self.radius),
             pygame.Vector2(self.pos.x + self.radius, self.pos.y - self.radius),
@@ -83,7 +83,7 @@ class DirectionalEntity:
         self.bound_box.bottom_rigth.x = pos.x + self.radius
         self.bound_box.bottom_rigth.y = pos.y - self.radius
 
-        return  self.bound_box
+        return self.bound_box
 
     def calc_next_pos(self, forward=True) -> pygame.Vector2:
         if forward:
@@ -158,10 +158,13 @@ class Player(DirectionalEntity):
 
         return self.rays
 
-    def handle_events(self, events: list[GameEvent]):
+    def handle_events(self, events: GameEventList):
         for event in events:
-            if event.type_ == GameEventType.TOGGLE_POLAR_TO_CARTESIAN_CORRECTION:
-                self.correct_polar_to_cart = not self.correct_polar_to_cart
+            if isinstance(event, pygame.event.Event):
+                pass
+            else:
+                if event.type_ == GameEventType.TOGGLE_POLAR_TO_CARTESIAN_CORRECTION:
+                    self.correct_polar_to_cart = not self.correct_polar_to_cart
 
 
 @dataclass
@@ -177,13 +180,19 @@ class MapData:
     cell_metas: dict[int, CellMeta]
     default_color: pygame.Color = field(default_factory=partial(pygame.Color, "black"))
 
+    def in_cell_bounds(self, cell_cord: pygame.Vector2) -> bool:
+        cell_y = int(cell_cord.y)
+        cell_x = int(cell_cord.x)
+
+        return not (cell_y < 0 or cell_y >= len(self.cell_data)) or (
+            cell_x < 0 or cell_x >= len(self.cell_data[cell_y])
+        )
+
     def get_cell_meta(self, cell_cord: pygame.Vector2) -> CellMeta | None:
         cell_y = int(cell_cord.y)
         cell_x = int(cell_cord.x)
 
-        if (cell_y < 0 or cell_y >= len(self.cell_data)) or (
-            cell_x < 0 or cell_x >= len(self.cell_data[cell_y])
-        ):
+        if not self.in_cell_bounds(cell_cord):
             return None
 
         return self.cell_metas[self.cell_data[cell_y][cell_x]]
@@ -197,6 +206,16 @@ class MapData:
     def get_wall_texture(self, cell_cord: pygame.Vector2) -> pygame.Surface | None:
         cell_meta = self.get_cell_meta(cell_cord)
         return cell_meta.wall_texture if cell_meta else None
+
+    def set_wall_texture(self, cell_cord: pygame.Vector2, cell_meta_id: int) -> bool:
+        if not self.in_cell_bounds(cell_cord) or cell_meta_id not in self.cell_metas:
+            return False
+        cell_y = int(cell_cord.y)
+        cell_x = int(cell_cord.x)
+
+        self.cell_data[cell_y][cell_x] = cell_meta_id
+
+        return True
 
     def is_solid_cell(self, cell_cord: pygame.Vector2) -> bool:
         cell_y = int(cell_cord.y)
@@ -222,18 +241,19 @@ class Map:
         self.cell_count = len(self.map_data.cell_data[0])
         self.intersect_buffer = [
             Intersect(
-                origin = pygame.Vector2(),
-                vert_intersect = pygame.Vector2(),
-                horiz_intersect = pygame.Vector2(),
-                intersect = pygame.Vector2(),
-                distance = 0,
-                cos_distance = 0,
-                collision = False,
-                color = pygame.Color("red"),
-                marked = False,
-                intersect_type = "x",
-                wall_texture = None
-            ) for _ in range(MAX_STEPS_PER_CAST)
+                origin=pygame.Vector2(),
+                vert_intersect=pygame.Vector2(),
+                horiz_intersect=pygame.Vector2(),
+                intersect=pygame.Vector2(),
+                distance=0,
+                cos_distance=0,
+                collision=False,
+                color=pygame.Color("red"),
+                marked=False,
+                intersect_type="x",
+                wall_texture=None,
+            )
+            for _ in range(MAX_STEPS_PER_CAST)
         ]
         self.last_intersect_count = 0
 
@@ -558,5 +578,3 @@ class MapLoader:
             ),
             sample_wall_texture,
         )
-
-

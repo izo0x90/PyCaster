@@ -2,12 +2,15 @@ from enum import Enum, auto
 from functools import partial
 from dataclasses import dataclass, field
 import math
+import logging
+from typing import Callable
 
 import pygame
 
 from events import GameEvent, GameEventType
-from raycast import Map, Intersect, Player, Ray, Intersect, VERY_NEAR_ZERO
+from raycast import Map, Player, Ray, Intersect, VERY_NEAR_ZERO
 
+logger = logging.getLogger(__name__)
 
 TEST_TEXTURE = [
     0,
@@ -31,6 +34,87 @@ TEST_TEXTURE = [
     0,
     255,
 ]
+
+
+class BaseView:
+    pos: pygame.Vector2
+    surface: pygame.Surface
+
+    def localize_mouse(self, x: int, y: int) -> tuple[int | None, int | None]:
+        local_region_x_start = self.pos.x
+        local_region_x_end = self.pos.x + self.surface.get_width()
+        local_region_y_start = self.pos.y
+        local_region_y_end = self.pos.y + self.surface.get_height()
+
+        if (
+            x >= local_region_x_start
+            and x <= local_region_x_end
+            and y >= local_region_y_start
+            and y <= local_region_y_end
+        ):
+            local_x = int(x - self.pos.x)
+            local_y = int(y - self.pos.y)
+
+            return (local_x, local_y)
+
+        return None, None
+
+
+@dataclass
+class HelpView(BaseView):
+    pos: pygame.Vector2
+    surface: pygame.Surface
+    help_text: list[tuple[int, tuple[Callable | None, str]]] = field(
+        default_factory=list
+    )
+
+    def __post_init__(self):
+        self.update_text()
+
+    def update_text(self):
+        font = pygame.font.Font(None, 32)
+        self.text = []
+        self.help_text.append((103, (None, "TEST")))
+        for key, action_hint in self.help_text:
+            _, hint = action_hint
+            text = f"{pygame.key.name(key)}: {hint}"
+            text_obj = font.render(text, True, "green")
+            self.text.append(text_obj)
+
+    def clear(self):
+        self.surface.fill("chocolate")
+
+    def draw_help_text(self):
+        x_offset = 0
+        y_offset = 0
+        longest_line = 0
+        for text_obj in self.text:
+            text_rect = text_obj.get_rect()
+            longest_line = max(longest_line, text_rect.width)
+            text_rect.y = y_offset
+            y_offset += text_rect.height
+            if y_offset > self.surface.get_height():
+                y_offset = 0
+                x_offset = longest_line
+                longest_line = 0
+                text_rect.x = x_offset
+                text_rect.y = y_offset
+
+            self.surface.blit(text_obj, text_rect)
+
+    def render(self, tick):
+        self.tick_count = tick
+        self.clear()
+        self.draw_help_text()
+
+    def handle_events(self, events: list[GameEvent]):
+        for event in events:
+            if isinstance(event, pygame.event.Event):
+                pass
+            else:
+                if event.type_ == GameEventType.SET_HELP_TEXT:
+                    self.help_text = event.meta.get("text", "")
+                    self.update_text()
 
 
 class WallShadingType(Enum):
@@ -72,6 +156,10 @@ class FPSView:
             (self.surface_col_width, self.col_max_scale_h), flags=pygame.SRCALPHA
         )
         self.dark.fill((1, 1, 1))
+        self.floor_rect = pygame.Rect(
+            (0, self.surface.get_height() / 2),
+            (self.surface.get_width(), self.surface.get_height() / 2),
+        )
         # self.floor_view = Mode7SubView(self.surface, self.player)
 
     def draw_col(
@@ -83,7 +171,9 @@ class FPSView:
         wall_texture: pygame.Surface | None = None,
     ):
         x_surface = self.surface.get_width() * width_scalar
-        height_surface = min(self.wall_height / (height_scalar + VERY_NEAR_ZERO), self.col_max_scale_h)
+        height_surface = min(
+            self.wall_height / (height_scalar + VERY_NEAR_ZERO), self.col_max_scale_h
+        )
         y_surface = (self.surface.get_height() - height_surface) / 2
         distance_squared_light_loss = height_scalar**2 * self.light_loss_multiplier
         if self.wall_shading == WallShadingType.TEXTURE and wall_texture:
@@ -140,7 +230,9 @@ class FPSView:
         rays = self.player.fov_rays()
         ray_count = self.player.fov_ray_count
         for ray_idx, player_ray in enumerate(rays):
-            intersects, count = self.map.intersect(player_ray, self.player.dir, self.tick_count)
+            intersects, count = self.map.intersect(
+                player_ray, self.player.dir, self.tick_count
+            )
             for intersect_idx in range(count):
                 intersect = intersects[intersect_idx]
                 if intersect.collision:
@@ -165,6 +257,7 @@ class FPSView:
 
     def clear(self):
         self.surface.fill("pink")
+        pygame.draw.rect(self.surface, "cyan4", self.floor_rect)
 
     def render(self, tick):
         self.tick_count = tick
@@ -175,27 +268,60 @@ class FPSView:
 
     def handle_events(self, events: list[GameEvent]):
         for event in events:
-            if event.type_ == GameEventType.TOGGLE_DISTANCE_CORRECTION:
-                self.true_distance = not self.true_distance
-            elif event.type_ == GameEventType.TOGGLE_TEXTURE_TYPE:
-                self.wall_shading = WallShadingType(
-                    (self.wall_shading.value + 1) % (len(WallShadingType)) + 1
-                )
+            if isinstance(event, pygame.event.Event):
+                pass
+            else:
+                if event.type_ == GameEventType.TOGGLE_DISTANCE_CORRECTION:
+                    self.true_distance = not self.true_distance
+                elif event.type_ == GameEventType.TOGGLE_TEXTURE_TYPE:
+                    self.wall_shading = WallShadingType(
+                        (self.wall_shading.value + 1) % (len(WallShadingType)) + 1
+                    )
 
 
 @dataclass
-class TopDownDebugView:
+class TopDownDebugView(BaseView):
     pos: pygame.Vector2
     surface: pygame.Surface
     map: Map
     player: Player
     tick_count: int = 0
+    selected_cell_meta: int = 1
+    wall_pen_down: bool = False
 
-    def handle_mouse_input(self, x: int, y: int, button: int):
-        cell = self.map.get_cell(self.upmap_point(pygame.Vector2(x,y)))
-        if (cell_meta:=self.map.map_data.get_cell_meta(cell)):
-            if button == 3:
+    def handle_mouse_input(self, event: pygame.event.Event):
+        x, y = event.pos
+        action = None
+
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            if event.button == 1:
+                self.wall_pen_down = True
+                action = 1
+        elif event.type == pygame.MOUSEBUTTONUP:
+            if event.button == 1:
+                self.wall_pen_down = False
+                return
+
+            elif event.button == 3:
+                action = 3
+
+        elif event.type == pygame.MOUSEMOTION:
+            if self.wall_pen_down:
+                action = 1
+
+        if action is None:
+            return
+
+        local_x, local_y = self.localize_mouse(x, y)
+        if local_x is None or local_y is None:
+            return
+
+        cell = self.map.get_cell(self.upmap_point(pygame.Vector2(local_x, local_y)))
+        if (cell_meta := self.map.map_data.get_cell_meta(cell)) is not None:
+            if action == 3:
                 logger.info(f"{cell}, {cell_meta}")
+            elif action == 1:
+                self.map.map_data.set_wall_texture(cell, self.selected_cell_meta)
 
     def upmap_point(self, cord: pygame.Vector2):
         x = 2 * (cord.x / self.surface.get_width()) - 1
@@ -234,7 +360,9 @@ class TopDownDebugView:
         y = int(screen_grid_step_y * cell_cord.y)
         return pygame.Rect((int(x), int(y)), (screen_grid_step_x, screen_grid_step_y))
 
-    def draw_intersect(self, ray: Ray, intersects: list[Intersect], count: int, marked_only=False):
+    def draw_intersect(
+        self, ray: Ray, intersects: list[Intersect], count: int, marked_only=False
+    ):
         for intersect_idx in range(count):
             intersect = intersects[intersect_idx]
             color = "black"
@@ -335,18 +463,24 @@ class TopDownDebugView:
             cur_pos += self.map.grid_step
 
     def draw_single_ray_cast(self):
-        intersects, count = self.map.intersect(self.player.get_entity_ray(), self.player.dir, self.tick_count)
+        intersects, count = self.map.intersect(
+            self.player.get_entity_ray(), self.player.dir, self.tick_count
+        )
         self.draw_intersect(self.player.get_entity_ray(), intersects, count)
 
     def draw_ray_cast_fov(self, marked_only=False):
         for player_ray in self.player.fov_rays():
-            intersects, count = self.map.intersect(player_ray, self.player.dir, self.tick_count)
+            intersects, count = self.map.intersect(
+                player_ray, self.player.dir, self.tick_count
+            )
             self.draw_intersect(player_ray, intersects, count, marked_only)
 
     def draw_collision_bound(self):
         first_collision_per_ray = []
         for player_ray in self.player.fov_rays():
-            intersects, count = self.map.intersect(player_ray, self.player.dir, self.tick_count)
+            intersects, count = self.map.intersect(
+                player_ray, self.player.dir, self.tick_count
+            )
             for intersect_idx in range(count):
                 intersect = intersects[intersect_idx]
                 if intersect.collision:
@@ -354,8 +488,8 @@ class TopDownDebugView:
 
                     pygame.draw.circle(
                         self.surface,
-                        "cyan",self.
-                        map_point(intersect.intersect),
+                        "cyan",
+                        self.map_point(intersect.intersect),
                         math.ceil(self.map_scalar(0.005).x),
                     )
                     break
@@ -424,6 +558,10 @@ class TopDownDebugView:
 
     def handle_events(self, events: list[GameEvent]):
         for event in events:
-            if event.type_ == GameEventType.MOUSE_CLICK:
-                self.handle_mouse_input(event.meta.get("x"), event.meta.get("y"), event.meta.get("button"))
-
+            if isinstance(event, pygame.event.Event):
+                if event.type in [
+                    pygame.MOUSEMOTION,
+                    pygame.MOUSEBUTTONUP,
+                    pygame.MOUSEBUTTONDOWN,
+                ]:
+                    self.handle_mouse_input(event)

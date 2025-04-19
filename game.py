@@ -5,8 +5,9 @@ from typing import Protocol
 
 import pygame
 
-from events import GameEvent, GameEventType 
+from events import GameEvent, GameEventType, GameEventList
 from raycast import Map, Player
+
 
 class View(Protocol):
     pos: pygame.Vector2
@@ -16,7 +17,7 @@ class View(Protocol):
 
     def render(self, tick: int): ...
 
-    def handle_events(self, events: list[GameEvent]): ...
+    def handle_events(self, events: GameEventList): ...
 
 
 class GameState(Enum):
@@ -34,23 +35,42 @@ class Game:
     state: GameState = GameState.RUNNING
     key_map: dict = field(default_factory=dict)
     key_map_repeat: dict = field(default_factory=dict)
-    game_events_for_tick: list[GameEvent] = field(default_factory=list)
+    game_events_for_tick: GameEventList = field(default_factory=list)
     tick_count: int = 0
 
     def __post_init__(self):
         self.key_map = {
-            pygame.K_q: self.action_quit,
-            pygame.K_6: self.action_toggle_distance_correction,
-            pygame.K_7: self.action_toggle_porlar_to_cartesian_correction,
-            pygame.K_8: self.action_toggle_wall_texture_type,
+            pygame.K_q: (self.action_quit, "Quit"),
+            pygame.K_6: (
+                self.action_toggle_distance_correction,
+                "Toggle distance to projection plane correction",
+            ),
+            pygame.K_7: (
+                self.action_toggle_porlar_to_cartesian_correction,
+                "Toggle polar to cartesion correction",
+            ),
+            pygame.K_8: (self.action_toggle_wall_texture_type, "Rotate texture type"),
         }
 
         self.key_map_repeat = {
-            pygame.K_w: self.action_player_move,
-            pygame.K_s: partial(self.action_player_move, False),
-            pygame.K_d: self.action_player_rotate,
-            pygame.K_a: partial(self.action_player_rotate, False),
+            pygame.K_w: (self.action_player_move, "Move player forward"),
+            pygame.K_s: (
+                partial(self.action_player_move, False),
+                "Move player backward",
+            ),
+            pygame.K_d: (self.action_player_rotate, "Rotate player clockwise"),
+            pygame.K_a: (
+                partial(self.action_player_rotate, False),
+                "Rotate player counter clockwise",
+            ),
         }
+
+        help_text = list(self.key_map.items())
+        help_text += list(self.key_map_repeat.items())
+
+        self.game_events_for_tick.append(
+            GameEvent(GameEventType.SET_HELP_TEXT, {"text": help_text})
+        )
 
     def util_clear_events(self):
         self.game_events_for_tick.clear()
@@ -94,16 +114,18 @@ class Game:
         self.state = GameState.QUITING
 
     def handle_repeat_input(self, keys):
-        for key_code, action in self.key_map_repeat.items():
+        for key_code, action_hint in self.key_map_repeat.items():
             if keys[key_code]:
+                action, _ = action_hint
                 action()
 
     def handle_input(self, key_code: int):
-        if action := self.key_map.get(key_code, None):
+        if action_help := self.key_map.get(key_code, None):
+            action, _ = action_help
             action()
 
-    def handle_mouse_input(self, x: int, y: int, button: int):
-        self.game_events_for_tick.append(GameEvent(GameEventType.MOUSE_CLICK, {"x": x, "y": y, "button": button}))
+    def handle_mouse_input(self, event: pygame.event.Event):
+        self.game_events_for_tick.append(event)
 
     def dispatch_events(self):
         # Dispatch to views
